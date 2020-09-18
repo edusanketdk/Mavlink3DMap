@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<title>Ardupilot Visual 3D</title>
+		<style>
+			body { margin: 0; }
+			canvas { display: block; }
+        </style>
+        
+        <script language="JavaScript" type="text/javascript" src="./js/jquery/jquery-3.4.1.min.js"></script>
+		<script language="JavaScript" type="text/javascript" src="./js/jquery/jquery-ui.min.js"></script>
+        
+        <script language="JavaScript" type="text/javascript" src="js/three.js"></script>
+        <script language="JavaScript" type="text/javascript" src="js/OrbitControls.js"></script>
+        <script language="JavaScript" type="text/javascript" src="js/js_globals.js"></script>
+        <script language="JavaScript" type="text/javascript" src="js/js_websocketComm.js"></script>
+        <script language="JavaScript" type="text/javascript" src="js/js_vehicle.js"></script>
+	</head>
+	<body>
+        
+		
+        
+        <script>
+
+            
+            function addNoise(geometry, noiseX, noiseY, noiseZ) {
+                var noiseX = noiseX || 2;
+                var noiseY = noiseY || noiseX;
+                var noiseZ = noiseZ || noiseY;
+                for(var i = 0; i < geometry.vertices.length; i++){
+                    var v = geometry.vertices[i];
+                    v.x += -noiseX / 2 + Math.random() * noiseX;
+                    v.y += -noiseY / 2 + Math.random() * noiseY;
+                    v.z += -noiseZ / 2 + Math.random() * noiseZ;
+                }
+                return geometry;
+            }
+
+
+        </script>
+
+        
+        <script>
+            var v_needUpdate = false;
+            var v_scene;
+            var canvas;
+            var stats;
+            var camera, activeCamera;
+            var renderer;
+            var raycaster;
+            var mouse = new THREE.Vector2( 1, 1 );
+
+            var v_skip = 0;
+            var v_mediaRecorder;
+        </script>
+            
+
+        <script type="module">
+            import Stats from './js/stats.module.js';
+			            
+            
+            var v_droneIndex = 0;
+            var v_drone =  {};
+            var v_test;
+            var v_cameras = [];
+            
+            
+
+    
+
+
+            var fn_onShowMyCamera = function fn_onShowMyCamera (p_me, p_mycamera, p_cameraHelper)
+            {
+                v_cameras.push (p_mycamera);
+                v_scene.add (p_mycamera);
+                if (p_cameraHelper != null)
+                {
+                    v_scene.add (p_cameraHelper);
+                }
+            }
+
+            
+
+            function fn_on_ready()
+            {
+
+
+                function fn_init_Recorder ()
+                {
+
+                    
+                    var my_streamWS = new fn_websocketComm ("ws://127.0.0.1:8812");
+                    my_streamWS.fn_onWebSocketOpened = function ()
+                    {
+                        console.log ("Socket Connected");
+                    };
+
+                    my_streamWS.fn_init(function (e)
+                    {
+                        console.log (e);
+                    });
+
+                    my_streamWS.fn_onWebSocketOpened = function (e)
+                    {
+                    };
+
+                    my_streamWS.fn_onPacketReceived = function (e)
+                    {
+                    }
+                    
+                    const c_videoc_outputStream = canvas.captureStream(10); // FPS
+
+                    const c_outputStream = new MediaStream();
+                    [c_videoc_outputStream].forEach(function(s) {
+                        s.getTracks().forEach(function(t) {
+                            c_outputStream.addTrack(t);
+                        });
+                    });
+
+                    v_mediaRecorder = new MediaRecorder(c_outputStream, {
+                    mimeType: 'video/webm',
+                    videoBitsPerSecond: 3000000
+                    });
+
+                    v_mediaRecorder.addEventListener('dataavailable', e => {
+                        // v_skip = v_skip + 1;
+                        // if (v_skip%5!=0) 
+                        // {
+                        //     console.log ("skip");
+                        //     return ;
+                        // }
+                        // console.log ("run");
+
+                        my_streamWS.fn_send(e.data, true);
+                    });
+
+                    v_mediaRecorder.addEventListener('stop', () => {
+                    stopStreaming();
+                    //wsRef.current.close();
+                    });
+
+                    v_mediaRecorder.start(1000);
+                }
+
+                function fn_initWebsocket ()
+                {
+                    var my_webcomm = new fn_websocketComm ();
+                    my_webcomm.fn_onWebSocketOpened = function ()
+                    {
+                        console.log ("Socket Connected");
+                    };
+
+                    my_webcomm.fn_init(function (e)
+                    {
+                        console.log (e);
+                    });
+
+                    my_webcomm.fn_onWebSocketOpened = function (e)
+                    {
+                    };
+
+                    my_webcomm.fn_onPacketReceived = function (e)
+                    {
+                        var msg = JSON.parse(e);
+                        switch (msg.id)
+                        {
+                            case  MAVLINK_MSG_ID_HEARTBEAT:
+                            {
+                                if (v_drone[msg.src] != null) break;
+                                let v_vehicle = new c_vehicle();
+                                v_vehicle.fn_showMyCamera = fn_onShowMyCamera;
+                                v_vehicle.fn_createVehicle(msg.type);
+                                v_vehicle.fn_setPosition (0,0,0);
+                                v_vehicle.fn_setCameraRelativePosition(1.0,  0.0 ,0.0,
+                                                                       1.0, -1.0 ,0.0);
+                                v_vehicle.fn_castShadow(false);
+                                v_scene.add(v_vehicle.fn_getMesh());
+                                v_drone[msg.src] = v_vehicle;
+                            }
+                            break;
+
+                            // case MAVLINK_MSG_ID_GPS_RAW_INT:
+                            // {
+                            //     if (v_drone[0] == null) return ;
+                            //     v_drone[0].fn_setPosition (2,0, msg.alt/100000.0);
+                            // }
+                            // break;
+                            
+
+                            case MAVLINK_MSG_ID_LOCAL_POSITION_NED:
+                            {
+                                const v_vehicle = v_drone[msg.src];
+                                if (v_vehicle == null) return ;
+                                
+                                v_vehicle.fn_setPosition (msg.x / 10.0,msg.y / 10.0, -msg.z / 10.0 );
+                            }
+                            break;
+
+                            case MAVLINK_MSG_ID_ATTITUDE:
+                            {
+                                const v_vehicle = v_drone[msg.src];
+                                if (v_vehicle == null) return ;
+                                
+                                v_vehicle.fn_setRotation (msg.roll, msg.pitch, -msg.yaw);
+                            }
+                            break;
+
+                        };
+                    };
+
+                }
+				
+                
+                
+                // $(window).on('resize', function ()
+                // {
+                //     //renderer.setSize( window.innerWidth, window.innerHeight );
+                //     fn_resizeRendererToDisplaySize(renderer);
+                // });
+
+                // POSITION (FRONT, UP, LEFT)
+                // Our Javascript will go here.
+                // {
+                //     const color = 0xFFFFFF;  // white
+                //     const near = 10;
+                //     const far = 100;
+                //     v_scene.fog = new THREE.Fog(color, near, far);
+                // }
+
+                
+
+                //container.appendChild( renderer.domElement );
+
+
+                
+                
+                // const pointLight = new THREE.DirectionalLight(0xFFFFFF, 1); // color , intensity
+                // pointLight.position.set(1,10,0);
+                // pointLight.castShadow = true;
+                // pointLight.shadow.mapSize.width = 1024;
+                // pointLight.shadow.mapSize.height = 1024;
+                // v_scene.add(pointLight);
+
+                
+                // const skyColor = 0xB1E1FF;  // light blue
+                // const groundColor = 0xB97A20;  // brownish orange
+                // const intensity = 1;
+                // const light = new THREE.HemisphereLight(skyColor, groundColor, intensity);
+                // v_scene.add(light);
+                
+
+                function  fn_initTHREE()
+                {
+                    canvas = document.getElementById( 'map3D' );
+
+                    stats = new Stats();
+                    document.body.appendChild( stats.dom );
+                    v_scene = new THREE.Scene();
+                
+                    camera = new THREE.PerspectiveCamera
+                    ( 75,                                       // FOV
+                    canvas.width / canvas.height, //window.innerWidth / window.innerHeight,     // Aspect Ratio
+                    0.1,                                        // Near Clipping Pane
+                    1000                                        // Far Clipping Pane
+                    );
+
+                    activeCamera = camera;
+                    v_cameras.push (camera);
+
+                    camera.position.set (5,5,0);
+                    camera.lookAt (new THREE.Vector3(0,0,0));
+
+                    
+                    renderer = new THREE.WebGLRenderer(
+                        {
+                            //https://threejsfundamentals.org/threejs/lessons/threejs-cameras.html
+                            //logarithmicDepthBuffer: true,
+                            canvas
+                        }
+                    );
+                    renderer.setSize( window.innerWidth, window.innerHeight );
+                    // Set a near white clear color (default is black)
+                    renderer.setClearColor ('#337ab7');
+                    
+                    //Shadows are disabled by default, but really help in creating a feeling of depth 
+                    // — so we’ll need to enable them on the renderer.
+                    renderer.shadowMap.enabled = true;
+                    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                
+                    var plane = new THREE.Mesh(
+                    new THREE.PlaneGeometry( 15, 15, 15, 15 ),
+                    new THREE.MeshStandardMaterial( { color: 0x39ff39, flatShading: true, wireframe: false } )
+                    );
+                    plane.rotateX(-Math.PI/2);
+                    plane.receiveShadow = true;
+                    
+                    v_scene.add( plane );
+
+                    var ambientLight = new THREE.AmbientLight( 0xffffff, 0.8 );
+                    v_scene.add( ambientLight );
+
+                    camera.m_controls = new THREE.OrbitControls( camera, renderer.domElement );
+                    
+                    raycaster = new THREE.Raycaster();
+                    camera.m_controls.addEventListener( 'change', function() { renderer.render(v_scene, camera); } );
+                    
+                    
+                    document.addEventListener( 'keydown', onKeyDown, false );
+
+                }
+
+
+                function onKeyDown( event ) {
+
+
+                    const c_keyLength = v_cameras.length;
+                    if (c_keyLength == 0) return ;
+
+                switch ( event.keyCode ) {
+
+                    case 79: /*O*/
+
+                        v_droneIndex +=1;
+                        v_droneIndex = v_droneIndex % c_keyLength;
+                        activeCamera = v_cameras[v_droneIndex];
+                        //activeHelper = cameraOrthoHelper;
+
+                        break;
+
+                    case 80: /*P*/
+
+                        v_droneIndex -=1;
+                        if (v_droneIndex <0) v_droneIndex = c_keyLength -1;
+                        activeCamera = v_cameras[v_droneIndex];
+                        //activeHelper = cameraPerspectiveHelper;
+
+                        break;
+                    
+                    case 87: /*w*/
+                        activeCamera.m_ownerObject.fn_setCameraDeltaOrientation(0,0.1,0);
+                        break;
+
+
+                    case 83: /*s*/
+                        activeCamera.m_ownerObject.fn_setCameraDeltaOrientation(0,-0.1,0);
+                        break;
+
+                    
+                    case 69: /*e*/
+                        activeCamera.m_ownerObject.fn_setCameraDeltaOrientation(-0.1,0,0);
+                        break;
+
+                    case 81: /*q*/
+                        activeCamera.m_ownerObject.fn_setCameraDeltaOrientation(0.1,0,0);
+                        break;
+                    
+                    case 68: /*d*/
+                        activeCamera.m_ownerObject.fn_setCameraDeltaOrientation(0.0,0,-0.1);
+                        break;
+                    
+                    case 65: /*a*/
+                        activeCamera.m_ownerObject.fn_setCameraDeltaOrientation(0.0,0,0.1);
+                        break;
+                    
+                    case 82: /*r*/
+                        activeCamera.m_ownerObject.fn_setCameraOrientation(0.0,0,0);
+                        break;
+                    
+
+                }
+
+            }
+
+                /*
+                    Create Objects
+                */
+                function fn_initObjects()
+                {
+                                
+
+                                
+                    // const axes = new THREE.AxesHelper();
+                    // axes.material.depthTest = false;
+                    // axes.renderOrder = 1;
+                    // v_test.add(axes);
+
+                    // v_test= new c_vehicle();
+                    // v_test.fn_createDroneX();
+                    // v_test.fn_setPosition (0,-2,0);
+                    // v_test.fn_castShadow(false);
+                    // v_scene.add(v_test.fn_getMesh());
+
+                    // v_test= new c_vehicle();
+                    // v_test.fn_createDronePlus();
+                    // v_test.fn_setPosition (-2,0,0);
+                    // v_test.fn_castShadow(false);
+                    // v_scene.add(v_test.fn_getMesh());
+
+                    // v_test= new c_vehicle();
+                    // v_test.fn_createUnknown();
+                    // v_test.fn_setPosition (-2,-2,0);
+                    // v_test.fn_castShadow(false);
+                    // v_scene.add(v_test.fn_getMesh());
+
+
+                    // v_test= new c_vehicle();
+                    // v_test.fn_showMyCamera = fn_onShowMyCamera;
+                    // v_test.fn_createDronePlane(true);
+                    // v_test.fn_setPosition (0,0,0);
+                    // v_test.fn_castShadow(false);
+                    // v_test.fn_setCameraRelativePosition(0.5, 0,0
+                    //                                 ,0.0 ,1.00 ,0.0);
+                    // v_test.fn_setRotation(0,0.0,0);
+                    // v_scene.add(v_test.fn_getMesh());
+                    
+
+
+                    document.addEventListener( 'mousemove', onMouseMove, false );
+
+                    
+                }
+
+                function onMouseMove( event ) {
+
+                    event.preventDefault();
+
+                    mouse.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+                    mouse.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+
+                }
+
+
+                /*
+                    Resize THREE based on canvas scale.
+                */
+                function fn_resizeRendererToDisplaySize(renderer) {
+                    const canvas = renderer.domElement;
+                    const width = canvas.clientWidth;
+                    const height = canvas.clientHeight;
+                    const needResize = canvas.width !== width || canvas.height !== height;
+                    if (needResize) {
+                        renderer.setSize(width, height, false);
+                    }
+                    return needResize;
+                }
+                          
+                /*
+                    Update & run simulator
+                */
+                function fn_animate(time) {
+                     
+                    // v_skip = v_skip + 1;
+                    // if (v_skip %5 != 0) 
+                    // {
+                    //     requestAnimationFrame( fn_animate );
+                    //     return ;
+                    // }
+                   
+                    // INTERSECTION
+                    // raycaster.setFromCamera( mouse, camera );
+                    // var intersection = raycaster.intersectObject( v_test.fn_getMesh(), true );
+                    // if ( intersection.length > 0 ) {
+
+                    //      for (let i=0; i<intersection.length;++i)
+                    //      {
+                    //          //console.log (intersection);
+                    //          intersection[i].object.wireframe = true; //m_tag.fn_getMesh().material.wireframe = true;
+                    //      }
+                    //  }
+                    // EOF INTERSECTION
+
+                    if (fn_resizeRendererToDisplaySize(renderer)) {
+                        const canvas = renderer.domElement;
+                        camera.aspect = canvas.clientWidth / canvas.clientHeight;
+                        camera.updateProjectionMatrix();
+                    }
+
+                    const c_keys = Object.keys(v_drone);
+                    const c_key_length = c_keys.length;
+                    for (var i=0; i< c_key_length; ++i)
+                    {
+                        v_drone[c_keys[i]].fn_updateSimulationStep();
+                    }
+                    //v_test.fn_updateSimulationStep();
+                    
+                   // renderer.render( v_scene, camera); //activeCamera );
+                    renderer.render( v_scene, activeCamera); //activeCamera );
+                    stats.update();
+                    requestAnimationFrame( fn_animate );
+                    
+                }
+
+                fn_initTHREE();
+                fn_initObjects();
+                fn_initWebsocket();
+                fn_init_Recorder();
+                fn_animate();
+            };
+
+            $(document).ready(fn_on_ready);
+
+        </script>
+        
+        <canvas id='map3D'></canvas>
+	</body>
+</html>
