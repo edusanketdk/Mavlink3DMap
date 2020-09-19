@@ -1,4 +1,4 @@
-### Ardupilot 3D-Map
+### Mavlink 3D-Map
 
 This tool receives navigation information via MAVLINK, and display vehicles in 3D environment using [three.js ](https://threejs.org/ "three.js ").
 
